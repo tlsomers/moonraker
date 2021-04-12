@@ -64,7 +64,10 @@ class Tasks:
         if self.current is None:
             return None
         else:
-            return self.get_task(self.current).to_dict()
+            task = self.get_task(self.current)
+            if task is None:
+                return task
+            return task.to_dict()
 
     async def _handle_create_task(self, web_request):
         taskid = self.tasks_ns.get("nextid", 0)
@@ -99,7 +102,7 @@ class Tasks:
             return {"error": "Task does not exist"}
         klippy_apis = self.server.lookup_component('klippy_apis')
         await klippy_apis.start_print(task.filename)
-        self.current = id
+        self.current = taskid
 
 
     def get_task(self, taskid):
