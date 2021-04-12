@@ -184,7 +184,7 @@ class PrinterTask:
         self.status = data.get("status")
         self.update_from_ps(data)
         self.last_job_id = None
-        self.jobs = []
+        self.jobs = data.get("status") or []
 
     def get(self, name):
         if not hasattr(self, name):
