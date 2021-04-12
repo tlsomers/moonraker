@@ -169,6 +169,7 @@ class Tasks:
             if self.current:
                 task = self.get_task(self.current)
                 task.job_id = event["job"]["job_id"]
+                self.save_task(task)
 
 
 class PrinterTask:
