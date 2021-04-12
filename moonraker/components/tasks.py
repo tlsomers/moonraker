@@ -1,6 +1,7 @@
 # History cache for printer jobs
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
+import json
 import logging
 import time
 import os
@@ -24,14 +25,20 @@ class Tasks:
         self.server.register_event_handler(
             "server:klippy_shutdown", self._handle_shutdown)
 
+        self.server.register_event_handler(
+            "history:history_changed", self._handle_history)
+
         self.server.register_endpoint(
             "/server/tasks/list", ['GET'], self._handle_tasks_list)
 
         self.server.register_endpoint(
-            "/server/tasks/create", ['GET'], self._add_new_task)
+            "/server/tasks/create", ['GET'], self._handle_create_task)
 
         self.server.register_endpoint(
             "/server/tasks/start", ['GET'], self._start_task)
+
+        self.server.register_endpoint(
+            "/server/tasks/current", ['GET'], self._handle_current_task)
 
         database.register_local_namespace(TASK_NAMESPACE)
         self.tasks_ns = database.wrap_namespace(TASK_NAMESPACE,
@@ -40,51 +47,81 @@ class Tasks:
         self.current = None
         self.print_stats = {}
 
+        if self.tasks_ns["tasks"] is None:
+            self.tasks_ns["tasks"] = {}
+
     async def _handle_tasks_list(self, web_request):
-        savedtasks = self.tasks_ns.values()
+        savedtasks = self.tasks_ns.get("tasks")
+        if savedtasks is None:
+            return []
         tasks = []
-        for task in savedtasks:
-            if type(task) == "int":
-                continue
-            task["metadata"] = self.gcdb[task.filename]
+        for task in savedtasks.values():
+            task["metadata"] = self.gcdb.get(task["filename"])
             tasks.append(task)
         return tasks
 
-    async def _add_new_task(self, web_request):
-        nextid = self.tasks_ns.get("nextid", 0)
+    async def _handle_current_task(self, web_request):
+        if self.current is None:
+            return None
+        else:
+            return self.get_task(self.current).to_dict()
+
+    async def _handle_create_task(self, web_request):
+        taskid = self.tasks_ns.get("nextid", 0)
 
         file = web_request.get_str("file")
         if not self.file_manager.check_file_exists("gcodes", file):
             return {"error": "File does not exist"}
 
         name, _ = os.path.splitext(os.path.basename(file))
-        task = {"id": nextid, "filename": file, "name": name, "status": "created"}
-        self.tasks_ns.insert(nextid, task)
-        self.tasks_ns.update_child("nextid", nextid + 1)
-        return task
+
+        task = PrinterTask()
+        task.filename = file
+        task.name = name
+        task.created_time = time.time()
+        task.task_id = f"{taskid:06}"
+        task.status = "created"
+
+        self.save_task(task)
+        self.tasks_ns["nextid"] = taskid + 1
+        return task.to_dict()
 
     async def _start_task(self, web_request):
-        id = web_request.get_int("id", None)
-        if id is None:
+        taskid = web_request.get_int("id", None)
+        if taskid is None:
             return {"error": "No task specified"}
-        task = self.get_task(id)
+
+        if type(taskid) == int:
+            taskid = f"{taskid:06}"
+
+        task = self.get_task(taskid)
         if task is None:
             return {"error": "Task does not exist"}
         klippy_apis = self.server.lookup_component('klippy_apis')
-        klippy_apis.start_print(task["filename"])
+        await klippy_apis.start_print(task.filename)
         self.current = id
 
 
-    def get_task(self, id):
-        task = self.tasks_ns.get(id)
+    def get_task(self, taskid):
+        if type(taskid) == int:
+            taskid = f"{taskid:06}"
+
+        task = self.tasks_ns["tasks"].get(taskid)
         if task is None:
             return None
-        task["metadata"] = self.gcdb[task["filename"]]
+        task = PrinterTask(task)
+        task.metadata = self.gcdb.get(task.filename)
+        return task
+
+    def save_task(self, task):
+        tasks = self.tasks_ns.get("tasks") or {}
+        tasks[task.task_id] = task.to_dict()
+        self.tasks_ns["tasks"] = tasks
 
     def set_task_state(self, status):
-        task = self.tasks_ns.get(self.current)
-        task["status"] = status
-        self.tasks_ns.update_child(self.current, task)
+        task = self.get_task(self.current)
+        task.status = status
+        self.save_task(task)
 
     def finish_task(self, status):
         self.set_task_state(status)
@@ -123,6 +160,43 @@ class Tasks:
 
     def _handle_disconnect(self):
         self.finish_task("klippy_disconnect")
+
+    def _handle_history(self, event):
+        if event["action"] == "added":
+            if self.current:
+                task = self.get_task(self.current)
+                task.job_id = event["job"]["job_id"]
+
+
+class PrinterTask:
+    def __init__(self, data={}):
+        self.task_id = data.get("task_id")
+        self.created_time = data.get("created_time") or time.time()
+        self.filename = data.get("filename")
+        self.name = data.get("name")
+        self.metadata = data.get("metadata")
+        self.status = data.get("status")
+        self.update_from_ps(data)
+        self.job_id = None
+
+    def get(self, name):
+        if not hasattr(self, name):
+            return None
+        return getattr(self, name)
+
+    def to_dict(self):
+        return self.__dict__.copy()
+
+    def set(self, name, val):
+        if not hasattr(self, name):
+            return
+        setattr(self, name, val)
+
+    def update_from_ps(self, data):
+        for i in data:
+            if hasattr(self, i):
+                setattr(self, i, data[i])
+
 
 def load_component(config):
     return Tasks(config)
