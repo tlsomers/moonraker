@@ -47,7 +47,7 @@ class Tasks:
         self.current = None
         self.print_stats = {}
 
-        if self.tasks_ns["tasks"] is None:
+        if self.tasks_ns.get("tasks") is None:
             self.tasks_ns["tasks"] = {}
 
     async def _handle_tasks_list(self, web_request):
