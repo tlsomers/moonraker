@@ -168,7 +168,9 @@ class Tasks:
         if event["action"] == "added":
             if self.current:
                 task = self.get_task(self.current)
-                task.job_id = event["job"]["job_id"]
+                job_id = event["job"]["job_id"]
+                task.last_job_id = job_id
+                task.jobs.append(job_id)
                 self.save_task(task)
 
 
@@ -181,7 +183,8 @@ class PrinterTask:
         self.metadata = data.get("metadata")
         self.status = data.get("status")
         self.update_from_ps(data)
-        self.job_id = None
+        self.last_job_id = None
+        self.jobs = []
 
     def get(self, name):
         if not hasattr(self, name):
